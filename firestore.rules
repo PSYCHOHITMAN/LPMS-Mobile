@@ -1,0 +1,155 @@
+rules_version = '2';
+
+// LPMS Firestore security rules. Paste into Firebase console > Firestore > Rules > Publish.
+//
+// Roles live in users/{uid}.role: ADMIN, COORDINATOR (field staff), TEACHER, PARENT, LEARNER.
+// Privacy (POPIA): children's records are only readable by
+//   - staff (admin, coordinator),
+//   - the teacher at that learner's school (users/{uid}.schoolId must equal the record's schoolId),
+//   - the learner's own login and linked parents (their uid is in guardianIds / viewerIds).
+// Messages are readable only by the two people in them. Closed (completed or cancelled) registers cannot be
+// changed by teachers; only staff can correct or reopen them.
+// The app asks for data with matching filters (see FirestoreLpmsRepository), so queries stay allowed.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function profile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function hasProfile() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function isAdmin() { return hasProfile() && profile().role == 'ADMIN'; }
+    function isStaff() { return hasProfile() && profile().role in ['ADMIN', 'COORDINATOR']; }
+    function isTeacherOf(schoolId) {
+      return hasProfile() && profile().role == 'TEACHER' && profile().schoolId == schoolId;
+    }
+    function roleOf(uid) { return get(/databases/$(database)/documents/users/$(uid)).data.role; }
+    // A session is open for attendance only while it is SCHEDULED (completed and cancelled registers are locked).
+    function sessionIsOpen(sessionId) {
+      return get(/databases/$(database)/documents/sessions/$(sessionId)).data.status == 'SCHEDULED';
+    }
+    // Parents may only write to teachers, coordinators and admins; teachers and staff may write to anyone.
+    function canMessage(toId) {
+      return hasProfile() && (
+        isStaff() || profile().role == 'TEACHER' ||
+        (profile().role == 'PARENT' && roleOf(toId) in ['TEACHER', 'COORDINATOR', 'ADMIN'])
+      );
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow read: if isStaff();
+      // Self sign-up: teacher or parent only, active, and NOT approved (staff approve it before sign-in).
+      allow create: if signedIn() && request.auth.uid == uid
+                    && request.resource.data.role in ['TEACHER', 'PARENT']
+                    && request.resource.data.active == true
+                    && request.resource.data.approved == false;
+      // Users may rename themselves; nothing else.
+      allow update: if signedIn() && request.auth.uid == uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName']);
+      // Coordinators may approve new accounts, and change nothing else.
+      allow update: if isStaff()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['approved']);
+      // Admins manage everyone (create profiles, change role, suspend, set school).
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Schools are public so the register screen can list them before sign-in.
+    match /schools/{id} {
+      allow read: if true;
+      allow write: if isStaff();
+    }
+
+    // Not personal data: any signed-in user may read these.
+    match /programmes/{id}  { allow read: if signedIn(); allow write: if isStaff(); }
+    match /enrollments/{id} { allow read: if signedIn(); allow write: if isStaff(); }
+    // Sessions: staff schedule anywhere; a teacher schedules at their own school and may only change the status
+    // (close or cancel) of their own school's sessions. Reopening a closed session is for staff.
+    match /sessions/{id} {
+      allow read: if signedIn();
+      allow create: if isStaff() || isTeacherOf(request.resource.data.schoolId);
+      allow update: if isStaff()
+                    || (isTeacherOf(resource.data.schoolId)
+                        && resource.data.status == 'SCHEDULED'
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']));
+      allow delete: if isStaff();
+    }
+    match /reports/{id}     { allow read: if signedIn(); allow write: if isStaff(); }
+
+    // Learners are enrolled by staff. Each allow line is a separate way to be allowed.
+    match /learners/{id} {
+      allow read: if isStaff();
+      allow read: if isTeacherOf(resource.data.schoolId);
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow read: if signedIn() && request.auth.uid in resource.data.guardianIds;
+      allow create, update, delete: if isStaff();
+    }
+
+    // Attendance and progress carry schoolId and viewerIds (copied from the learner) so the same rules apply.
+    match /attendance/{id} {
+      allow read: if isStaff();
+      allow read: if isTeacherOf(resource.data.schoolId);
+      allow read: if signedIn() && request.auth.uid in resource.data.viewerIds;
+      allow create: if isStaff()
+                    || (isTeacherOf(request.resource.data.schoolId) && sessionIsOpen(request.resource.data.sessionId));
+      allow update: if isStaff()
+                    || (isTeacherOf(resource.data.schoolId) && isTeacherOf(request.resource.data.schoolId)
+                        && sessionIsOpen(request.resource.data.sessionId));
+      allow delete: if isStaff();
+    }
+
+    match /progress/{id} {
+      allow read: if isStaff();
+      allow read: if isTeacherOf(resource.data.schoolId);
+      allow read: if signedIn() && request.auth.uid in resource.data.viewerIds;
+      allow create: if isStaff() || isTeacherOf(request.resource.data.schoolId);
+      allow update: if isStaff() || (isTeacherOf(resource.data.schoolId) && isTeacherOf(request.resource.data.schoolId));
+      allow delete: if isStaff();
+    }
+
+    // Feedback is private to its author and staff.
+    match /feedback/{id} {
+      allow read: if isStaff();
+      allow read: if signedIn() && resource.data.authorId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.authorId == request.auth.uid;
+      // Admins may also create (the demo data seeder writes feedback on behalf of other people).
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /resources/{id} {
+      allow read: if signedIn();
+      allow create, update: if isStaff() || (hasProfile() && profile().role == 'TEACHER');
+      allow delete: if isAdmin();
+    }
+
+    // Staff directory: names only, for picking who to message. Parents are never listed.
+    match /directory/{uid} {
+      allow read: if signedIn();
+      allow write: if isStaff();
+    }
+
+    // Messages are private to the two people in them (admins can write demo conversations, but not read others).
+    match /messages/{id} {
+      allow read: if signedIn() && request.auth.uid in resource.data.participants;
+      allow create: if signedIn()
+                    && request.resource.data.fromId == request.auth.uid
+                    && request.resource.data.participants.size() == 2
+                    && request.resource.data.participants.hasAll([request.auth.uid, request.resource.data.toId])
+                    && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 1000
+                    && canMessage(request.resource.data.toId);
+      allow create: if isAdmin();
+      // The recipient may mark a message read, and change nothing else.
+      allow update: if signedIn() && resource.data.toId == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+    }
+
+    // Field visits are internal to staff.
+    match /visits/{id} {
+      allow read, write: if isStaff();
+    }
+
+    // Activity log: staff may add entries as themselves; only admins read; nobody edits or deletes.
+    match /audit/{id} {
+      allow read: if isAdmin();
+      allow create: if isStaff() && request.resource.data.actorId == request.auth.uid;
+    }
+  }
+}
