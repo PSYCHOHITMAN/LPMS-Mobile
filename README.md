@@ -42,7 +42,6 @@ The app supports programme scheduling, attendance registers, learner progress tr
 | **Coordinator** | Manage schools and learners, link parents, schedule/close/reopen sessions, record school visits and generate funder reports |
 | **Teacher** | View their class, schedule sessions, mark and close attendance registers, record learner progress and message parents |
 | **Parent/Guardian** | View linked children's attendance and reading progress, and message teachers/coordinators |
-| **Learner** | Use an assisted login to view personal attendance and progress |
 
 ### Programme tools
 
