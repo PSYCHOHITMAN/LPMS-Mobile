@@ -11,3 +11,7 @@ app/build/
 *.apk
 *.aab
 google-services.json
+
+keystore.properties
+*.jks
+*.keystore
