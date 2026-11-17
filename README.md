@@ -243,4 +243,4 @@ Possible future work includes multi-grade teacher assignments, richer assessment
 
 ## Contributors
 
-**Team Point Blank** — XISD6329 Task 2
+**Team Point Blank** — XISD6329
