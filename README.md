@@ -2,7 +2,7 @@
 
 **Literacy Programme Management System (LPMS)** is an Android application built for **READ Educational Trust** to help staff manage school literacy programmes, track learner attendance and reading progress, and communicate with parents and guardians.
 
-Developed by **Team Point Blank** for XISD6329 Task 2.
+Developed by **Team Point Blank** for XISD6329.
 
 ![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?logo=android&logoColor=white)
 ![Language](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF?logo=kotlin&logoColor=white)
